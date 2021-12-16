@@ -21,6 +21,7 @@ spngt_deps = [
     dependency('libpng', fallback : [ 'libpng', 'png_dep']),
     cc.find_library('m', required : false), # stb_image
     dependency('wuffs'),
+    cc.find_library('dl', required : true),
 ]
 
 if get_option('benchmarks') == false

@@ -5,6 +5,8 @@
 #include <time.h>
 #endif
 
+#include <dlfcn.h>
+
 #include <inttypes.h>
 #include <stdio.h>
 
@@ -25,7 +27,12 @@ struct spngt_times {
   uint64_t stb;
   uint64_t lodepng;
   uint64_t wuffs;
+  uint64_t external;
 };
+
+const char *external_name = NULL;
+uint8_t *(*external_png_func)(const uint8_t *data, uint64_t size, uint32_t *w,
+                              uint32_t *h);
 
 static const int decode_runs = 5;
 static const int encode_runs = 3;
@@ -36,6 +43,10 @@ static void print_times(struct spngt_times *times) {
   printf("stb_image: %" PRIu64 " usec\n", times->stb / (uint64_t)1000);
   printf("lodepng:   %" PRIu64 " usec\n", times->lodepng / (uint64_t)1000);
   printf("wuffs:     %" PRIu64 " usec\n", times->wuffs / (uint64_t)1000);
+  if (external_name) {
+    printf("%s:     %" PRIu64 " usec\n", external_name,
+           times->external / (uint64_t)1000);
+  }
 }
 
 static uint64_t spngt_time(void) {
@@ -59,7 +70,8 @@ static int decode_benchmark(void *pngbuf, size_t siz_pngbuf) {
                              .spng = UINT64_MAX,
                              .stb = UINT64_MAX,
                              .lodepng = UINT64_MAX,
-                             .wuffs = UINT64_MAX};
+                             .wuffs = UINT64_MAX,
+                             .external = UINT64_MAX};
 
   int i;
   for (i = 0; i < decode_runs; i++) {
@@ -138,6 +150,24 @@ static int decode_benchmark(void *pngbuf, size_t siz_pngbuf) {
       best.wuffs = elapsed;
 
     free(img_wuffs);
+
+    /* external lib */
+    if (external_name) {
+      uint32_t w, h;
+
+      a = spngt_time();
+      uint8_t *img_external = external_png_func(pngbuf, siz_pngbuf, &w, &h);
+      b = spngt_time();
+
+      if (!img_external)
+        printf("ERROR: external decode failed\n");
+
+      elapsed = b - a;
+      if (best.external > elapsed)
+        best.external = elapsed;
+
+      free(img_external);
+    }
   }
 
   print_times(&best);
@@ -151,6 +181,27 @@ int main(int argc, char **argv) {
   if (argc < 2) {
     printf("no input file\n");
     return 1;
+  }
+
+  const char *external_lib = getenv("EXTERNAL_LIB");
+  void *lib = NULL;
+  if (external_lib) {
+    lib = dlopen(external_lib, RTLD_NOW);
+    if (!lib) {
+      fprintf(stderr, "%s\n", dlerror());
+      return 1;
+    }
+    const char *(*name)() = dlsym(lib, "get_name");
+    if (!name) {
+      fprintf(stderr, "%s\n", dlerror());
+      return 1;
+    }
+    external_name = name();
+    external_png_func = dlsym(lib, "decode_png");
+    if (!external_png_func) {
+      fprintf(stderr, "%s\n", dlerror());
+      return 1;
+    }
   }
 
   int do_encode = 0;
@@ -225,6 +276,10 @@ int main(int argc, char **argv) {
   }
 
   free(pngbuf);
+
+  if (lib) {
+    dlclose(lib);
+  }
 
   return ret;
 }
